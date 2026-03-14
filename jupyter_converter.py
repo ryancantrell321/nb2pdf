@@ -1,13 +1,4 @@
-"""
-Notebook → PDF Converter
-========================
-Requirements:
-    pip install nbconvert nbformat portalocker psutil
-    pip install tkinterdnd2          # optional — enables drag-and-drop
-
-Run:
-    python notebook_converter.py
-"""
+software_version = 2026.01
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
