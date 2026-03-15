@@ -1,8 +1,9 @@
-software_version = 2026.01
+software_version = 2026.03
+GITHUB_REPO = "ryancantrell321/Jupyter"   # ← change to your repo
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading, subprocess, sys, os, shutil, queue, gc, time, atexit
+import threading, subprocess, sys, os, shutil, queue, gc, time, atexit, urllib.request, json, webbrowser
 from pathlib import Path
 from datetime import datetime
 
@@ -160,17 +161,51 @@ except ImportError:
 # Design tokens
 # ══════════════════════════════════════════════════════════════════════════════
 
-BG          = "#0F0F13"      # near-black canvas
-CARD        = "#17171E"      # card surface
-CARD2       = "#1E1E28"      # card surface elevated
-BORDER      = "#2A2A38"      # subtle border
-ACCENT      = "#6C63FF"      # violet
-ACCENT2     = "#4ECCA3"      # teal — second accent
-TEXT        = "#EAEAF2"      # primary text
-MUTED       = "#6B6B88"      # secondary text
-OK          = "#4ECCA3"
-WARN        = "#FFB347"
-ERR         = "#FF6B6B"
+THEMES = {
+    "dark": {
+        "BG":      "#0F0F13",
+        "CARD":    "#17171E",
+        "CARD2":   "#1E1E28",
+        "BORDER":  "#2A2A38",
+        "ACCENT":  "#6C63FF",
+        "ACCENT2": "#4ECCA3",
+        "TEXT":    "#EAEAF2",
+        "MUTED":   "#6B6B88",
+        "OK":      "#4ECCA3",
+        "WARN":    "#FFB347",
+        "ERR":     "#FF6B6B",
+    },
+    "light": {
+        "BG":      "#F4F4F8",
+        "CARD":    "#FFFFFF",
+        "CARD2":   "#EBEBF2",
+        "BORDER":  "#D0D0E0",
+        "ACCENT":  "#6C63FF",
+        "ACCENT2": "#00A87A",
+        "TEXT":    "#1A1A2E",
+        "MUTED":   "#7070A0",
+        "OK":      "#00A87A",
+        "WARN":    "#E07800",
+        "ERR":     "#D93025",
+    },
+}
+
+_THEME = "dark"
+
+def _t(key):
+    return THEMES[_THEME][key]
+
+BG      = _t("BG")
+CARD    = _t("CARD")
+CARD2   = _t("CARD2")
+BORDER  = _t("BORDER")
+ACCENT  = _t("ACCENT")
+ACCENT2 = _t("ACCENT2")
+TEXT    = _t("TEXT")
+MUTED   = _t("MUTED")
+OK      = _t("OK")
+WARN    = _t("WARN")
+ERR     = _t("ERR")
 
 # Font stack
 TF  = ("Segoe UI Semibold", 22)   # hero title
@@ -386,6 +421,11 @@ class HoverButton(tk.Label):
         self.bind("<Leave>",    lambda e: self.config(bg=self._bg))
         self.bind("<Button-1>", lambda e: self._cmd())
 
+    def update_colors(self, bg, hover_bg):
+        self._bg  = bg
+        self._hbg = hover_bg
+        self.config(bg=bg)
+
     def set_state(self, enabled: bool):
         if enabled:
             self.config(cursor="hand2")
@@ -414,12 +454,16 @@ class Pill(tk.Label):
 class FileCard(tk.Frame):
     """One notebook entry rendered as a card."""
 
-    STATUS_CFG = {
-        "queued":     ("QUEUED",      MUTED,   CARD2),
-        "converting": ("CONVERTING",  WARN,    CARD2),
-        "done":       ("DONE",        OK,      "#141C1A"),
-        "error":      ("FAILED",      ERR,     "#1C1414"),
-    }
+    @property
+    def STATUS_CFG(self):
+        done_bg = _darken(THEMES[_THEME]["OK"],    0.15) if _THEME == "dark" else "#E6F7F2"
+        err_bg  = _darken(THEMES[_THEME]["ERR"],   0.15) if _THEME == "dark" else "#FDECEA"
+        return {
+            "queued":     ("QUEUED",      MUTED,   CARD2),
+            "converting": ("CONVERTING",  WARN,    CARD2),
+            "done":       ("DONE",        OK,      done_bg),
+            "error":      ("FAILED",      ERR,     err_bg),
+        }
 
     def __init__(self, parent, path: str, on_remove, **kw):
         super().__init__(parent, bg=CARD2,
@@ -509,6 +553,133 @@ def _set_bg_recursive(widget, bg):
 # ══════════════════════════════════════════════════════════════════════════════
 # Dialogs
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Update checker
+# ══════════════════════════════════════════════════════════════════════════════
+
+class UpdateChecker:
+    API_URL = "https://api.github.com/repos/{repo}/releases/latest"
+
+    @staticmethod
+    def fetch_latest() -> dict | None:
+        """Returns dict with 'version' (float) and 'url', or None on failure."""
+        try:
+            url = UpdateChecker.API_URL.format(repo=GITHUB_REPO)
+            req = urllib.request.Request(url, headers={"User-Agent": "nb-pdf-updater"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read())
+            tag = data.get("tag_name", "").lstrip("v")
+            return {
+                "version": float(tag),
+                "tag": data.get("tag_name", tag),
+                "url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+                "notes": (data.get("body") or "").strip()[:400],
+                "assets": [
+                    a["browser_download_url"]
+                    for a in data.get("assets", [])
+                    if a["name"].endswith(".exe")
+                ],
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def update_available(latest: dict | None) -> bool:
+        if not latest:
+            return False
+        try:
+            return latest["version"] > software_version
+        except Exception:
+            return False
+
+
+class UpdateDialog(tk.Toplevel):
+    def __init__(self, parent, latest: dict | None, silent_if_current: bool = False):
+        # If called from background and no update, do nothing
+        if silent_if_current and not UpdateChecker.update_available(latest):
+            return
+        super().__init__(parent)
+        self.title("Software Update")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self.grab_set()
+        self._latest = latest
+        self._build()
+        self.update_idletasks()
+        w, h = 520, 400
+        self.geometry(f"{w}x{h}")
+        x = parent.winfo_rootx() + (parent.winfo_width()  - w) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        self.geometry(f"+{x}+{y}")
+
+    def _build(self):
+        hdr = tk.Frame(self, bg=CARD, pady=16)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="Software Update", bg=CARD, fg=TEXT,
+                 font=TF, padx=24).pack(side="left")
+
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        latest = self._latest
+        has_update = UpdateChecker.update_available(latest)
+
+        # Version row — current
+        self._info_row(body, "Installed version", str(software_version), TEXT)
+
+        if latest is None:
+            self._info_row(body, "Latest version", "Could not reach GitHub", ERR)
+            status_text  = "Unable to check for updates."
+            status_color = WARN
+        elif has_update:
+            self._info_row(body, "Latest version", str(latest["version"]), OK)
+            status_text  = "A new version is available!"
+            status_color = OK
+        else:
+            self._info_row(body, "Latest version", str(latest["version"]), MUTED)
+            status_text  = "You are up to date."
+            status_color = ACCENT2
+
+        tk.Label(body, text=status_text, bg=BG, fg=status_color,
+                 font=("Segoe UI Semibold", 11), pady=10).pack(anchor="w")
+
+        # Release notes (if update available)
+        if has_update and latest.get("notes"):
+            notes_card = tk.Frame(body, bg=CARD,
+                                  highlightbackground=BORDER, highlightthickness=1)
+            notes_card.pack(fill="x", pady=(0, 10))
+            tk.Label(notes_card, text=latest["notes"],
+                     bg=CARD, fg=MUTED, font=SF,
+                     wraplength=460, justify="left",
+                     padx=12, pady=8, anchor="w").pack(fill="x")
+
+        # Buttons
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(pady=(0, 16), padx=20, fill="x")
+
+        if has_update:
+            exe_assets = latest.get("assets", [])
+            dl_url = exe_assets[0] if exe_assets else latest["url"]
+            HoverButton(btn_row, "Download Update ↗",
+                        lambda: (webbrowser.open(dl_url), self.destroy()),
+                        bg=ACCENT, hover_bg=_darken(ACCENT), fg=TEXT,
+                        font=("Segoe UI Semibold", 10),
+                        padx=18, pady=8).pack(side="left", padx=(0, 8))
+
+        HoverButton(btn_row, "Close", self.destroy,
+                    bg=CARD2, hover_bg=BORDER, fg=TEXT,
+                    font=BF).pack(side="left")
+
+    def _info_row(self, parent, label, value, val_color):
+        row = tk.Frame(parent, bg=CARD2,
+                       highlightbackground=BORDER, highlightthickness=1)
+        row.pack(fill="x", pady=3)
+        tk.Label(row, text=label, bg=CARD2, fg=MUTED,
+                 font=SF, width=20, anchor="w", padx=12, pady=10).pack(side="left")
+        tk.Label(row, text=value, bg=CARD2, fg=val_color,
+                 font=HF, padx=12).pack(side="right")
+
 
 class DepsDialog(tk.Toplevel):
     def __init__(self, parent, deps: dict):
@@ -615,6 +786,9 @@ class App(BaseClass):
             log_cb=self._log
         ).start()
 
+        # Background update check — runs once at startup
+        threading.Thread(target=self._bg_update_check, daemon=True).start()
+
         # Stop cleaner gracefully when window closes
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -712,12 +886,27 @@ class App(BaseClass):
         HoverButton(parent, "System Check", self._show_deps,
                     bg=CARD2, hover_bg=BORDER, fg=MUTED,
                     font=SF, padx=14, pady=6,
-                    anchor="w").pack(fill="x", padx=14, pady=(14, 4))
+                    anchor="w").pack(fill="x", padx=14, pady=(14, 2))
+
+        # ── Check for updates button ───────────────────────────────────────────
+        self._update_btn = HoverButton(parent, "Check for Updates", self._show_updates,
+                    bg=CARD2, hover_bg=BORDER, fg=MUTED,
+                    font=SF, padx=14, pady=6,
+                    anchor="w")
+        self._update_btn.pack(fill="x", padx=14, pady=(0, 4))
 
         # Spacer pushes version to bottom
         tk.Frame(parent, bg=CARD).pack(fill="both", expand=True)
 
-        tk.Label(parent, text="v3.0  •  nbconvert", bg=CARD, fg=MUTED,
+        # ── Theme toggle ──────────────────────────────────────────────────────
+        self._theme_btn = HoverButton(
+            parent, "☀  Light Mode", self._toggle_theme,
+            bg=CARD2, hover_bg=BORDER, fg=MUTED,
+            font=SF, padx=14, pady=6, anchor="w"
+        )
+        self._theme_btn.pack(fill="x", padx=14, pady=(0, 6))
+
+        tk.Label(parent, text=f"v{software_version}  •  nbconvert", bg=CARD, fg=MUTED,
                  font=("Segoe UI", 8), pady=12).pack()
 
     def _method_btn(self, parent, key, label, tip):
@@ -1038,6 +1227,99 @@ class App(BaseClass):
     def _show_deps(self):
         deps = Engine.deps()
         DepsDialog(self, deps)
+
+    # ══ Theme ══════════════════════════════════════════════════════════════════
+
+    def _toggle_theme(self):
+        global _THEME, BG, CARD, CARD2, BORDER, ACCENT, ACCENT2, TEXT, MUTED, OK, WARN, ERR
+        _THEME = "light" if _THEME == "dark" else "dark"
+        t = THEMES[_THEME]
+        BG, CARD, CARD2, BORDER = t["BG"], t["CARD"], t["CARD2"], t["BORDER"]
+        ACCENT, ACCENT2 = t["ACCENT"], t["ACCENT2"]
+        TEXT, MUTED, OK, WARN, ERR = t["TEXT"], t["MUTED"], t["OK"], t["WARN"], t["ERR"]
+
+        self._theme_btn.config(
+            text="🌙  Dark Mode" if _THEME == "light" else "☀  Light Mode"
+        )
+        self._repaint(self)
+        # Re-apply ttk progress bar colors
+        style = ttk.Style(self)
+        style.configure("TProgressbar",
+                        background=ACCENT, troughcolor=CARD2,
+                        bordercolor=CARD2, lightcolor=ACCENT, darkcolor=ACCENT)
+        style.configure("Thin.Horizontal.TProgressbar",
+                        background=ACCENT, troughcolor=BORDER, thickness=3)
+        # Refresh method buttons selection state
+        self._select_method(self._method.get())
+        # Refresh log tag colors
+        self._log_box.tag_configure("ok",   foreground=OK)
+        self._log_box.tag_configure("err",  foreground=ERR)
+        self._log_box.tag_configure("warn", foreground=WARN)
+        self._log_box.tag_configure("dim",  foreground=MUTED)
+        self._log_box.tag_configure("acc",  foreground=ACCENT2)
+        # Refresh file card statuses
+        for row in self._rows:
+            row.set_status(row.status)
+
+    # Color mapping: old theme color → new theme color
+    def _repaint(self, widget):
+        old = THEMES["light" if _THEME == "dark" else "dark"]
+        new = THEMES[_THEME]
+        color_map = {old[k]: new[k] for k in old}
+        # Also map done/err card backgrounds
+        if _THEME == "dark":
+            color_map["#E6F7F2"] = _darken(new["OK"],  0.15)
+            color_map["#FDECEA"] = _darken(new["ERR"], 0.15)
+        else:
+            color_map[_darken(old["OK"],  0.15)] = "#E6F7F2"
+            color_map[_darken(old["ERR"], 0.15)] = "#FDECEA"
+        self._repaint_widget(widget, color_map)
+
+    def _repaint_widget(self, widget, color_map):
+        for attr in ("bg", "fg", "background", "foreground",
+                     "highlightbackground", "highlightcolor",
+                     "insertbackground", "selectbackground"):
+            try:
+                cur = widget.cget(attr)
+                if cur in color_map:
+                    widget.config(**{attr: color_map[cur]})
+            except Exception:
+                pass
+        # Update HoverButton internal colors
+        if isinstance(widget, HoverButton):
+            try:
+                new_bg  = color_map.get(widget._bg,  widget._bg)
+                new_hbg = color_map.get(widget._hbg, widget._hbg)
+                widget._bg  = new_bg
+                widget._hbg = new_hbg
+            except Exception:
+                pass
+        for child in widget.winfo_children():
+            self._repaint_widget(child, color_map)
+
+    # ══ Updates ═══════════════════════════════════════════════════════════════
+
+    def _show_updates(self):
+        self._update_btn.config(text="Checking…", fg=WARN)
+        self.update_idletasks()
+        def _fetch():
+            latest = UpdateChecker.fetch_latest()
+            self.after(0, lambda: self._open_update_dialog(latest, silent=False))
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _open_update_dialog(self, latest, silent=False):
+        self._update_btn.config(text="Check for Updates", fg=MUTED)
+        UpdateDialog(self, latest, silent_if_current=silent)
+
+    def _bg_update_check(self):
+        time.sleep(3)   # let the UI settle first
+        latest = UpdateChecker.fetch_latest()
+        if UpdateChecker.update_available(latest):
+            self.after(0, lambda: self._notify_update(latest))
+
+    def _notify_update(self, latest):
+        self._update_btn.config(text="Update Available ↑", fg=OK)
+        self._log(f"Update available: v{latest['version']}  —  click 'Update Available ↑' to install.", "acc")
 
     def _startup_check(self):
         deps = Engine.deps()
