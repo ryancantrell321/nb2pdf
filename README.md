@@ -1,87 +1,138 @@
-# nb → pdf  |  Notebook Converter
+# NB2PDF — Jupyter Notebook to PDF Converter
 
-Convert Jupyter notebooks (`.ipynb`) to PDF — no Python, no terminal, no browser extensions.
-
----
-
-## Download & Run
-
-1. Download `NotebookToPDF.exe`
-2. Double-click to launch — no installation needed
-
-> Windows may show a SmartScreen warning on first run. Click **More info → Run anyway**.
+A production-quality desktop application for converting `.ipynb` Jupyter Notebook
+files to PDF, built with Python and Tkinter.
 
 ---
 
-## Requirements
+## Features
 
-You need at least one of the following to convert notebooks:
-
-### Option A — Browser (recommended, easiest)
-Any one of these browsers already installed on your PC:
-- Google Chrome
-- Microsoft Edge *(pre-installed on Windows 10/11)*
-- Brave
-
-### Option B — LaTeX (highest quality)
-- [MiKTeX](https://miktex.org/download) — recommended for Windows
-- or [TeX Live](https://tug.org/texlive/)
-
-> Not sure which you have? Click **System Check** inside the app to find out.
-
----
-
-## How to Use
-
-1. **Add notebooks** — click **Add Files** to pick `.ipynb` files, or **Add Folder** to scan a folder, or drag-and-drop files directly onto the window
-2. **Choose a method** — select **Browser** or **LaTeX** from the left sidebar
-3. **Set output folder** — defaults to your `Downloads` folder; click **Change Folder** to pick another
-4. **Click Convert All →**
-5. PDFs appear in your chosen output folder — click **Open Folder ↗** to go there directly
+| Feature | Details |
+|---------|---------|
+| **Browser conversion** | Uses headless Chrome / Edge / Brave to render HTML → PDF |
+| **LaTeX conversion** | Uses nbconvert + MiKTeX / TeX Live for high-fidelity PDFs |
+| **Drag & drop** | Drop `.ipynb` files directly onto the app window |
+| **System diagnostics** | Live dependency dashboard with one-click fixes |
+| **Live log console** | Color-coded real-time conversion output |
+| **Auto-updater** | Checks GitHub releases; downloads & applies updates safely |
+| **Single instance lock** | Prevents duplicate instances via portalocker |
+| **Temp file cleaner** | Cleans intermediate conversion artefacts |
+| **No-console subprocesses** | All child processes run silently with `CREATE_NO_WINDOW` |
+| **Window icon** | App icon applied to main window and all dialogs |
 
 ---
 
-## File Status
+## Project Structure
 
-Each notebook shows a live status badge:
-
-| Badge | Meaning |
-|---|---|
-| QUEUED | Waiting to be converted |
-| CONVERTING | In progress |
-| DONE | PDF saved successfully |
-| FAILED | Conversion error — check the log below |
+```
+nb2pdf/
+├── main.py                     Entry point
+├── nb2pdf_launcher.vbs         Windows launcher (activates venv, no console)
+├── requirements.txt
+│
+├── config/
+│   ├── constants.py            App-wide constants
+│   └── settings.py             JSON-persisted settings
+│
+├── core/
+│   ├── base_converter.py       Abstract converter interface
+│   ├── browser_converter.py    Browser (HTML → PDF) pipeline
+│   ├── latex_converter.py      LaTeX pipeline
+│   └── converter_factory.py    Factory for converter selection
+│
+├── services/
+│   ├── system_checker.py       Dependency detection & pip install
+│   └── updater.py              GitHub release checker & updater
+│
+├── integrations/
+│   ├── instance_lock.py        Single-instance portalocker lock
+│   └── memory_cleaner.py       Temp file & GC cleanup
+│
+├── utils/
+│   ├── logger.py               Centralized logging (file + GUI queue)
+│   ├── paths.py                Path helpers
+│   └── file_utils.py           Validation, file ops, subprocess flags, window icon
+│
+├── ui/
+│   ├── app_window.py           Main window (MVC controller)
+│   ├── theme.py                Dark / light theme definitions
+│   ├── widgets.py              Reusable styled widget library
+│   ├── drop_zone.py            Drag-and-drop file input
+│   ├── status_panel.py         Dependency status dashboard
+│   ├── log_console.py          Live log output widget
+│   ├── settings_dialog.py      Settings modal dialog
+│   ├── update_dialog.py        Update check / download dialog
+│   └── system_check_dialog.py  Dependency status dialog
+│
+└── assets/                     Icons, images
+```
 
 ---
 
-## Troubleshooting
+## Installation
 
-**App won't open / closes immediately**
-- Make sure you're on Windows 10 or Windows 11
+### 1. Prerequisites
 
-**FAILED status on all files**
-- Click **System Check** — if Browser and LaTeX both show "not found", install Chrome, Edge, or Brave
+- Python 3.11 or newer — [download](https://www.python.org/downloads/)
+- One of: Google Chrome, Microsoft Edge, or Brave Browser  
+  **OR**  
+  MiKTeX (Windows) or TeX Live (macOS/Linux)
 
-**PDF is blank or missing content**
-- Try switching to the **LaTeX** method for better output quality
+### 2. Create and populate the virtual environment
 
-**SmartScreen blocks the exe**
-- Click **More info → Run anyway** — the app is unsigned but safe
+```bash
+cd nb2pdf
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+```
 
-**App is already running message**
-- Check your taskbar; only one instance is allowed at a time
+### 3. Run the application
+
+Double-click `nb2pdf_launcher.vbs` — it activates the bundled `venv` and launches `main.py` silently (no console window, no system Python required after setup).
+
+Alternatively, from a terminal:
+
+```bash
+venv\Scripts\python main.py
+```
 
 ---
 
-## Output
+## Configuration
 
-PDFs are saved to the selected output folder with the same filename as the notebook.
+Settings are stored in:
 
-Example: `my_analysis.ipynb` → `my_analysis.pdf`
+| OS      | Path |
+|---------|------|
+| Windows | `%APPDATA%\NB2PDF\settings.json` |
+
+Logs are stored in:
+
+| OS      | Path |
+|---------|------|
+| Windows | `%APPDATA%\NB2PDF\logs\nb2pdf.log` |
+---
+
+
+## Conversion Methods
+
+### Method A — Browser (recommended)
+
+**Pipeline:** `.ipynb` → HTML (nbconvert) → PDF (headless Chrome/Edge/Brave)
+
+**Pros:** Renders exactly like Jupyter; supports interactive outputs.  
+**Cons:** Requires a Chromium-based browser.
+
+### Method B — LaTeX
+
+**Pipeline:** `.ipynb` → LaTeX (nbconvert) → PDF (pdflatex / xelatex)
+
+**Pros:** Publication-quality typesetting; no browser required.  
+**Cons:** Requires a full LaTeX distribution; some notebooks may need tweaking.
 
 ---
+
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE.md).
-Copyright (c) 2026 Nadeesha
+Apache 2.0 — see `LICENSE` for details.

@@ -1,0 +1,5 @@
+portalocker
+nbconvert
+notebook
+jupyter
+packaging
